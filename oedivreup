@@ -1,0 +1,511 @@
+ctk.set_appearance_mode("Light")  # Chế độ giao diện (Light/Dark/System)
+ctk.set_default_color_theme("assets/red.json")  # Chủ đề màu sắc
+
+
+
+app = ctk.CTk()  # Tạo cửa sổ chính
+app.title("GanSync Reup Video")
+app.geometry("1000x700")  # Kích thước cửa sổ
+# ...existing code...
+ICON_PATH = "assets/icon.ico"
+app.iconbitmap(ICON_PATH)
+# ...existing code...
+
+
+# Tạo một widget Notebook (TabView)
+tabview = ctk.CTkTabview(app, width=800, height=600)
+tabview.pack(expand=True, fill="both")
+
+# Thêm các tab
+tab_quan_ly_tai_khoan = tabview.add("Quản lý tài Khoản")
+tab_reup_video = tabview.add("Reup Video")
+tab_setting = tabview.add("Setting")
+tab_information = tabview.add("Information")
+
+# Nội dung cho tab "Quản lý tài Khoản"
+frame_main = ctk.CTkFrame(tab_quan_ly_tai_khoan)
+frame_main.pack(fill="both", expand=True)
+
+# 1/3 bên trái
+frame_left = ctk.CTkFrame(frame_main, width=300)
+frame_left.pack(side="left", fill="y", padx=10, pady=10)
+
+# Hiển thị đường dẫn logo
+DEFAULT_LOGO_PATH = "assets/logo.png"  # Thay bằng đường dẫn logo của bạn
+
+# Hàm tải logo
+def load_logo_from_path(logo_path):
+    try:
+        img = Image.open(logo_path)  # Mở ảnh từ đường dẫn
+        logo_img = CTkImage(img, size=(150, 150))  # Sử dụng CTkImage và đặt kích thước ảnh
+        logo_label.configure(image=logo_img)  # Cập nhật ảnh trong nhãn
+        logo_label.image = logo_img  # Lưu tham chiếu để tránh bị xóa bởi garbage collector
+        logo_label_reup.configure(image=logo_img)  # Cập nhật ảnh trong nhãn logo của tab Reup Video
+        logo_label_reup.image = logo_img  # Lưu tham chiếu để tránh bị xóa bởi garbage collector
+    except Exception as e:
+        print(f"Không thể tải ảnh: {e}")  # In lỗi nếu không thể tải ảnh
+
+# Nhãn hiển thị logo
+logo_label = ctk.CTkLabel(frame_left, text="", width=150, height=150)
+logo_label.pack(pady=10)
+
+# Tự động tải logo khi chương trình chạy
+
+
+# Nút Import Data
+def import_data():
+    file_path = filedialog.askopenfilename(filetypes=[("TXT Files", "*.txt"),("Excel Files", "*.xlsx"), ("All Files", "*.*")])
+    if file_path:
+        print(f"Imported data from {file_path}")
+
+btn_import = ctk.CTkButton(frame_left, text="Import Data", command=import_data)
+btn_import.pack(pady=5)
+
+# 2/3 bên phải
+frame_right = ctk.CTkFrame(frame_main)
+frame_right.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+# Thanh tìm kiếm
+search_var = tk.StringVar()
+
+
+def normalize_text(text):
+    """Chuẩn hóa chuỗi để so sánh không phân biệt dấu."""
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', text)
+        if unicodedata.category(c) != 'Mn'
+    ).lower()
+
+def search_table():
+    search_text = normalize_text(search_var.get().strip())  # Chuẩn hóa chuỗi tìm kiếm
+    for i, row in enumerate(scrollable_frame.winfo_children()):
+        if i == 0:  # Bỏ qua tiêu đề
+            continue
+        col1_text = normalize_text(row.winfo_children()[0].cget("text"))  # Chuẩn hóa văn bản cột 1
+        if search_text in col1_text:  # Kiểm tra chuỗi con
+            row.grid()  # Hiển thị dòng nếu khớp
+        else:
+            row.grid_remove()  # Ẩn dòng nếu không khớp
+
+search_frame = ctk.CTkFrame(frame_right)
+search_frame.pack(fill="x", pady=5)
+
+search_entry = ctk.CTkEntry(search_frame, textvariable=search_var, placeholder_text="Search account")
+search_entry.pack(side="left", fill="x", expand=True, padx=5)
+
+btn_search = ctk.CTkButton(search_frame, text="Search", command=search_table)
+btn_search.pack(side="right", padx=5)
+
+# Bảng hiển thị tài khoản
+scrollable_frame = ctk.CTkScrollableFrame(frame_right, width=750, height=500)
+scrollable_frame.pack(fill="both", expand=True, pady=10)
+
+# Tạo các tiêu đề cột
+header_frame = ctk.CTkFrame(scrollable_frame)
+header_frame.grid(row=0, column=0, sticky="nsew")
+
+header_col1 = ctk.CTkLabel(header_frame, text="User", width=375, anchor="w", font=("Arial", 14, "bold"))
+header_col1.grid(row=0, column=0, padx=5, pady=5)
+
+header_col2 = ctk.CTkLabel(header_frame, text="Password", width=375, anchor="w", font=("Arial", 14, "bold"))
+header_col2.grid(row=0, column=1, padx=5, pady=5)
+
+# Thêm dữ liệu mẫu vào bảng
+
+# Tab "Reup Video"
+# Nội dung cho tab "Reup Video"
+frame_reup_main = ctk.CTkFrame(tab_reup_video)
+frame_reup_main.pack(fill="both", expand=True)
+
+# 1/3 bên trái
+frame_reup_left = ctk.CTkFrame(frame_reup_main, width=300)
+frame_reup_left.pack(side="left", fill="y", padx=10, pady=10)
+
+# Hiển thị logo
+logo_label_reup = ctk.CTkLabel(frame_reup_left, text="", width=150, height=150)
+logo_label_reup.pack(pady=10)
+
+# Nút Start
+btn_start = ctk.CTkButton(frame_reup_left, text="Start", command=lambda: print("Reup started"))
+btn_start.pack(pady=5)
+
+# Nút Stop
+btn_stop = ctk.CTkButton(frame_reup_left, text="Stop", command=lambda: print("Reup stopped"))
+btn_stop.pack(pady=5)
+
+# Thêm vào phần 1/3 bên trái (frame_reup_left)
+
+# Dropdown chọn loại proxy
+proxy_type_var = tk.StringVar(value="None")  # Giá trị mặc định là "None"
+proxy_dropdown = ctk.CTkOptionMenu(
+    frame_reup_left,
+    values=["None", "http", "socks5", "socks4"],
+    variable=proxy_type_var,
+    width=140
+)
+proxy_dropdown.pack(pady=5)
+
+# Nút Load File Proxy
+def load_proxy_file():
+    if proxy_type_var.get() == "None":
+        write_log("Không thể load proxy vì loại proxy đang là 'None'.")
+        return
+    file_path = filedialog.askopenfilename(filetypes=[("TXT Files", "*.txt"), ("All Files", "*.*")])
+    if file_path:
+        write_log(f"Đã load file proxy: {file_path}")
+    else:
+        write_log("Không có file proxy nào được chọn.")
+
+btn_load_proxy = ctk.CTkButton(frame_reup_left, text="Load File Proxy", command=load_proxy_file)
+btn_load_proxy.pack(pady=5)
+
+# Cập nhật logic nút Start
+def start_reup():
+    proxy_type = proxy_type_var.get()
+    if proxy_type != "None":
+        write_log(f"Đã chọn loại proxy: {proxy_type}")
+    else:
+        write_log("Không sử dụng proxy.")
+
+    # Kiểm tra nếu proxy không được load
+    if proxy_type != "None" and not hasattr(start_reup, "proxy_loaded"):
+        write_log("Chưa load file proxy. Vui lòng load file proxy trước khi bắt đầu.")
+        return
+
+    write_log("Reup started.")
+
+btn_start.configure(command=start_reup)
+
+# Cập nhật logic nút Stop
+def stop_reup():
+    write_log("Reup stopped.")
+
+btn_stop.configure(command=stop_reup)
+
+# 2/3 bên phải
+frame_reup_right = ctk.CTkFrame(frame_reup_main)
+frame_reup_right.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+# 2/3 bên trên: Bảng Source Video
+frame_table = ctk.CTkFrame(frame_reup_right, height=400)
+frame_table.pack(fill="both", expand=True, padx=10, pady=5)
+
+# Tiêu đề cột
+header_frame_reup = ctk.CTkFrame(frame_table)
+header_frame_reup.grid(row=0, column=0, sticky="nsew")
+
+header_col_source = ctk.CTkLabel(header_frame_reup, text="Source Video", anchor="w", font=("Arial", 14, "bold"))
+header_col_source.grid(row=0, column=0, padx=5, pady=5)
+
+# Thêm dữ liệu mẫu vào bảng
+scrollable_frame_reup = ctk.CTkScrollableFrame(frame_table, width=750, height=420)
+scrollable_frame_reup.grid(row=1, column=0, sticky="nsew")
+
+sample_videos = [f"Video {i+1}" for i in range(30)]  # Danh sách video mẫu
+for i, video in enumerate(sample_videos):
+    video_label = ctk.CTkLabel(scrollable_frame_reup, text=video, anchor="w", font=("Arial", 20))
+    video_label.grid(row=i, column=0, padx=5, pady=2, sticky="w")
+
+# 1/3 bên dưới: Ô log
+frame_log = ctk.CTkFrame(frame_reup_right, height=200)
+frame_log.pack(fill="both", expand=True, padx=10, pady=5)
+
+log_text = tk.Text(frame_log, wrap="word", state="disabled", height=10)
+log_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+# Hàm ghi log
+def write_log(message):
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%H:%M:%S %d-%m-%Y")
+    log_text.configure(state="normal")
+    log_text.insert("end", f"{timestamp}: {message}\n")
+    log_text.configure(state="disabled")
+    log_text.see("end")  # Tự động cuộn xuống cuối
+
+# Tab "Setting"
+frame_setting_main = ctk.CTkFrame(tab_setting)
+frame_setting_main.pack(fill="both", expand=True, padx=10, pady=10)
+
+# 1/3 trên: Chia thành hai tab trái và phải
+frame_top = ctk.CTkFrame(frame_setting_main, height=100)
+frame_top.pack(fill="x", padx=10, pady=5)
+
+# Tab trái: Đặt lịch hẹn
+frame_schedule = ctk.CTkFrame(frame_top, width=100)
+frame_schedule.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+
+label_schedule = ctk.CTkLabel(frame_schedule, text="Đặt lịch hẹn", font=("Arial", 14, "bold"))
+label_schedule.pack(pady=2)
+
+# Ngày bắt đầu
+# Nút chọn ngày
+from tkcalendar import Calendar  # Thêm thư viện tkcalendar
+
+# Nút chọn ngày với bảng lịch
+def select_date():
+    def on_date_selected():
+        selected_date = calendar.get_date()
+        start_date_var.set(selected_date)  # Cập nhật giá trị vào ô nhập
+        calendar_window.destroy()  # Đóng cửa sổ lịch
+
+    # Tạo cửa sổ mới để hiển thị lịch
+    calendar_window = tk.Toplevel(app)
+    calendar_window.title("Chọn ngày")
+    calendar_window.geometry("300x300")
+
+    # Thêm lịch vào cửa sổ
+    calendar = Calendar(calendar_window, date_pattern="dd-mm-yyyy")  # Định dạng ngày
+    calendar.pack(pady=20)
+
+    # Nút xác nhận ngày
+    btn_confirm_date = ctk.CTkButton(calendar_window, text="Xác nhận", command=on_date_selected)
+    btn_confirm_date.pack(pady=10)
+
+# Ngày bắt đầu
+# Ngày bắt đầu
+label_start_date = ctk.CTkLabel(frame_schedule, text="Ngày bắt đầu:")
+label_start_date.pack(anchor="w", padx=10, pady=2)
+
+# Tạo khung chứa ô nhập và nút
+frame_date_picker = ctk.CTkFrame(frame_schedule)
+frame_date_picker.pack(fill="x", padx=10, pady=2)
+
+start_date_var = tk.StringVar()
+start_date_entry = ctk.CTkEntry(frame_date_picker, textvariable=start_date_var, placeholder_text="Chọn ngày", height=25)
+start_date_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))  # Ô nhập nằm bên trái
+
+btn_select_date = ctk.CTkButton(frame_date_picker, text="Chọn ngày", command=select_date, height=25, width=100)
+btn_select_date.pack(side="left")  # Nút nằm bên phải
+
+# Số video một ngày
+label_videos_per_day = ctk.CTkLabel(frame_schedule, text="Số video một ngày:")
+label_videos_per_day.pack(anchor="w", padx=10, pady=2)
+
+videos_per_day_var = tk.IntVar(value=1)
+videos_per_day_entry = ctk.CTkEntry(frame_schedule, textvariable=videos_per_day_var)
+videos_per_day_entry.pack(fill="x", padx=10, pady=2)
+
+# Thời gian đăng
+label_post_time = ctk.CTkLabel(frame_schedule, text="Thời gian đăng:")
+label_post_time.pack(anchor="w", padx=10, pady=2)
+
+post_time_var = tk.StringVar()
+post_time_entry = ctk.CTkEntry(frame_schedule, textvariable=post_time_var, placeholder_text="HH:MM")
+post_time_entry.pack(fill="x", padx=10, pady=2)
+
+# Tab phải: Preview video
+frame_preview = ctk.CTkFrame(frame_top, width=300)
+frame_preview.pack(side="right", fill="both", expand=True, padx=5, pady=5)
+
+label_preview = ctk.CTkLabel(frame_preview, text="Preview Video", font=("Arial", 14, "bold"))
+label_preview.pack(pady=10)
+
+# Nút chọn file video
+def select_video():
+    file_path = filedialog.askopenfilename(filetypes=[("MP4 Files", "*.mp4"), ("All Files", "*.*")])
+    if file_path:
+        video_path_var.set(file_path)
+        write_log(f"Đã chọn video: {file_path}")
+    else:
+        write_log("Không có video nào được chọn.")
+
+video_path_var = tk.StringVar()
+btn_select_video = ctk.CTkButton(frame_preview, text="Chọn video", command=select_video)
+btn_select_video.pack(pady=5)
+
+# Hiển thị đường dẫn video
+video_path_label = ctk.CTkLabel(frame_preview, textvariable=video_path_var, anchor="w")
+video_path_label.pack(fill="x", padx=10, pady=5)
+
+# Nút xem trước video
+def preview_video():
+    file_path = video_path_var.get()
+    if file_path:
+        import os
+        os.system(f'start {file_path}')  # Mở video bằng trình phát mặc định
+    else:
+        write_log("Không có video nào để xem trước.")
+
+btn_preview_video = ctk.CTkButton(frame_preview, text="Xem trước", command=preview_video)
+btn_preview_video.pack(pady=5)
+
+# 2/3 dưới: Nội dung khác
+frame_bottom = ctk.CTkFrame(frame_setting_main)
+frame_bottom.pack(fill="both", expand=True, padx=10, pady=5)
+
+# Tab trái: Hiệu ứng Video
+# Tab trái: Hiệu ứng Video
+frame_effects_left = ctk.CTkFrame(frame_bottom, width=400)
+frame_effects_left.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+
+label_effects = ctk.CTkLabel(frame_effects_left, text="Hiệu ứng Video", font=("Arial", 14, "bold"))
+label_effects.pack(pady=5)
+
+# Làm mờ nền hoặc phóng to video
+blur_background_var = tk.BooleanVar(value=False)
+blur_background_checkbox = ctk.CTkCheckBox(
+    frame_effects_left,
+    text="Làm mờ nền, căn giữa vừa video",
+    variable=blur_background_var
+)
+blur_background_checkbox.pack(anchor="w", padx=10, pady=2)
+
+# Tùy chọn làm mờ nền
+frame_blur_options = ctk.CTkFrame(frame_effects_left)
+frame_blur_options.pack(fill="x", padx=10, pady=2)
+
+blur_option_var = tk.StringVar(value="Blur Background")
+blur_option_radio1 = ctk.CTkRadioButton(
+    frame_blur_options,
+    text="Làm mờ nền",
+    variable=blur_option_var,
+    value="Blur Background",
+    command=lambda: toggle_blur_options("blur")
+)
+blur_option_radio1.pack(anchor="w", padx=10, pady=2)
+frame_blur_percentage = ctk.CTkFrame(frame_blur_options)
+frame_blur_percentage.pack(fill="x", padx=10, pady=2)
+
+label_blur_percentage = ctk.CTkLabel(frame_blur_percentage, text="Tỷ lệ phần trăm làm mờ:")
+label_blur_percentage.pack(anchor="w", pady=2)
+
+blur_percentage_var = tk.IntVar(value=50)
+blur_percentage_spinbox = CTkSpinbox(
+    frame_blur_percentage,
+    min_value=0,
+    max_value=100,
+    step_value=5,
+    variable=blur_percentage_var,
+    width=100,
+    height=40
+)
+blur_percentage_spinbox.pack(anchor="w", padx=10, pady=2)
+
+
+blur_option_radio2 = ctk.CTkRadioButton(
+    frame_blur_options,
+    text="Thêm nền màu",
+    variable=blur_option_var,
+    value="Add Color Background",
+    command=lambda: toggle_blur_options("color")
+)
+blur_option_radio2.pack(anchor="w", padx=10, pady=2)
+
+# Tỷ lệ phần trăm làm mờ
+
+# Bảng chọn màu
+frame_color_picker = ctk.CTkFrame(frame_blur_options)
+frame_color_picker.pack(fill="x", padx=10, pady=2)
+
+
+def select_color():
+    from tkinter.colorchooser import askcolor
+    color_code = askcolor(title="Chọn màu nền")[1]  # Lấy mã màu hex
+    if color_code:
+        write_log(f"Đã chọn màu: {color_code}")
+
+btn_color_picker = ctk.CTkButton(frame_color_picker, text="Chọn màu", command=select_color)
+btn_color_picker.pack(padx=10, pady=2)
+
+# Phóng to video
+zoom_video_var = tk.BooleanVar(value=False)
+zoom_video_checkbox = ctk.CTkCheckBox(
+    frame_effects_left,
+    text="Phóng to video",
+    variable=zoom_video_var
+)
+zoom_video_checkbox.pack(anchor="w", padx=10, pady=2)
+
+# Tùy chọn phóng to video với CTkSpinbox
+frame_zoom_options = ctk.CTkFrame(frame_effects_left)
+frame_zoom_options.pack(fill="x", padx=10, pady=2)
+
+label_zoom_percentage = ctk.CTkLabel(frame_zoom_options, text="Phóng to bao nhiêu phần trăm:")
+label_zoom_percentage.pack(anchor="w", pady=2)
+
+zoom_percentage_var = tk.IntVar(value=100)
+zoom_percentage_spinbox = CTkSpinbox(
+    frame_zoom_options,
+    min_value=100,
+    max_value=200,
+    step_value=10,
+    variable=zoom_percentage_var,
+    width=100,
+    height=40
+)
+zoom_percentage_spinbox.pack(anchor="w", padx=10, pady=2)
+
+frame_color_picker = ctk.CTkFrame(frame_blur_options)
+frame_color_picker.pack(fill="x", padx=10, pady=2)
+
+label_color_picker = ctk.CTkLabel(frame_color_picker, text="Chọn màu nền:")
+label_color_picker.pack(anchor="w", pady=2)
+
+def select_color():
+    from tkinter.colorchooser import askcolor
+    color_code = askcolor(title="Chọn màu nền")[1]  # Lấy mã màu hex
+    if color_code:
+        write_log(f"Đã chọn màu: {color_code}")
+
+btn_color_picker = ctk.CTkButton(frame_color_picker, text="Chọn màu", command=select_color)
+btn_color_picker.pack(padx=10, pady=2)
+
+
+# Ẩn/hiện các tùy chọn theo lựa chọn
+def toggle_blur_options(option):
+    if option == "blur":
+        frame_blur_percentage.pack(fill="x", padx=10, pady=2)
+        frame_color_picker.pack_forget()
+    elif option == "color":
+        frame_blur_percentage.pack_forget()
+        frame_color_picker.pack(fill="x", padx=10, pady=2)
+
+# Hiển thị mặc định
+toggle_blur_options("blur")
+
+# Tab phải: Cài đặt Video
+frame_settings_right = ctk.CTkFrame(frame_bottom, width=400)
+frame_settings_right.pack(side="right", fill="both", expand=True, padx=5, pady=5)
+
+label_settings = ctk.CTkLabel(frame_settings_right, text="Cài đặt Video", font=("Arial", 14, "bold"))
+label_settings.pack(pady=5)
+
+# Tỷ lệ video
+label_video_ratio = ctk.CTkLabel(frame_settings_right, text="Tỷ lệ Video:")
+label_video_ratio.pack(anchor="w", padx=10, pady=2)
+
+video_ratio_var = tk.StringVar(value="16:9")
+video_ratio_dropdown = ctk.CTkOptionMenu(
+    frame_settings_right,
+    values=["16:9", "4:3", "1:1", "9:16"],
+    variable=video_ratio_var,
+    width=150
+)
+video_ratio_dropdown.pack(padx=10, pady=2)
+
+# Watermark
+label_watermark = ctk.CTkLabel(frame_settings_right, text="Watermark:")
+label_watermark.pack(anchor="w", padx=10, pady=2)
+
+btn_select_watermark = ctk.CTkButton(frame_settings_right, text="Chọn Watermark", width=150, command=lambda: print("Chọn Watermark"))
+btn_select_watermark.pack(padx=10, pady=2)
+
+# Intro và Outro
+label_intro_outro = ctk.CTkLabel(frame_settings_right, text="Intro và Outro:")
+label_intro_outro.pack(anchor="w", padx=10, pady=2)
+
+btn_select_intro = ctk.CTkButton(frame_settings_right, text="Chọn Intro", width=150, command=lambda: print("Chọn Intro"))
+btn_select_intro.pack(padx=10, pady=2)
+
+btn_select_outro = ctk.CTkButton(frame_settings_right, text="Chọn Outro", width=150, command=lambda: print("Chọn Outro"))
+btn_select_outro.pack(padx=10, pady=2)
+
+
+# Tab "Information"
+label_information = ctk.CTkLabel(tab_information, text="Information", font=("Arial", 16))
+label_information.pack(pady=20)
+
+# Chạy ứng dụng
+load_logo_from_path(DEFAULT_LOGO_PATH)
+write_log("Chương trình đã khởi động.")
+app.mainloop()
