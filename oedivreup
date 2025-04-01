@@ -111,6 +111,22 @@ header_col2 = ctk.CTkLabel(header_frame, text="Password", width=375, anchor="w",
 header_col2.grid(row=0, column=1, padx=5, pady=5)
 
 # Thêm dữ liệu mẫu vào bảng
+# Thêm dữ liệu mẫu vào bảng
+for i in range(30):
+    user = f"User{i+1}"
+    password = f"Password{i+1}"
+    
+    # Tạo một hàng mới
+    row_frame = ctk.CTkFrame(scrollable_frame)
+    row_frame.grid(row=i+1, column=0, sticky="nsew", padx=5, pady=2)
+
+    # Cột User
+    user_label = ctk.CTkLabel(row_frame, text=user, width=375, anchor="w", font=("Arial", 12))
+    user_label.grid(row=0, column=0, padx=5, pady=2)
+
+    # Cột Password
+    password_label = ctk.CTkLabel(row_frame, text=password, width=375, anchor="w", font=("Arial", 12))
+    password_label.grid(row=0, column=1, padx=5, pady=2)
 
 # Tab "Reup Video"
 # Nội dung cho tab "Reup Video"
@@ -420,7 +436,7 @@ zoom_video_checkbox.pack(anchor="w", padx=10, pady=2)
 frame_zoom_options = ctk.CTkFrame(frame_effects_left)
 frame_zoom_options.pack(fill="x", padx=10, pady=2)
 
-label_zoom_percentage = ctk.CTkLabel(frame_zoom_options, text="Phóng to bao nhiêu phần trăm:")
+label_zoom_percentage = ctk.CTkLabel(frame_zoom_options, text="Tỉ lệ phóng to video:")
 label_zoom_percentage.pack(anchor="w", pady=2)
 
 zoom_percentage_var = tk.IntVar(value=100)
