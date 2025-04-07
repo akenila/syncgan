@@ -1,3 +1,802 @@
+proxies_list = []
+proxy_loaded = False
+running = False  # Variable to track if threads are running
+account_queue = queue.Queue()
+processed_count = 0
+total_accounts = 0
+ui_update_queue = queue.Queue()
+USER_DATA_PATH = "User Data"
+
+# Create a function to safely update the UI from the main thread
+def process_ui_updates():
+    try:
+        # Process up to 100 updates at once to avoid blocking the UI
+        for _ in range(100):
+            task = ui_update_queue.get_nowait()
+            if task[0] == "update_cell":
+                _, row, column, value = task
+                reup_table.insert(row, column, value)
+            elif task[0] == "add_row":
+                _, user, proxy, status = task
+                reup_table.add_row([user, proxy, status], len(reup_table.values))
+            elif task[0] == "log":
+                _, message = task
+                write_log(message)
+            ui_update_queue.task_done()
+    except queue.Empty:
+        pass
+    finally:
+        # Schedule the next check
+        app.after(100, process_ui_updates)
+
+# Thread-safe versions of UI update functions
+def safe_update_reup_cell(row, column, value):
+    ui_update_queue.put(("update_cell", row, column, value))
+
+def safe_add_reup_row(user, proxy, status):
+    ui_update_queue.put(("add_row", user, proxy, status))
+
+def safe_write_log(message):
+    ui_update_queue.put(("log", message))
+
+# Helper functions for threading and login
+# Hàm để lấy proxy ngẫu nhiên từ danh sách với định dạng cho requests
+def get_random_proxy():
+    global proxies_list
+    if not proxies_list:
+        return None
+        
+    proxy = random.choice(proxies_list)
+    proxy_type = proxy_type_var.get()
+    
+    if proxy_type == "http":
+        return {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+    elif proxy_type == "socks5":
+        return {"http": f"socks5://{proxy}", "https": f"socks5://{proxy}"}
+    elif proxy_type == "socks4":
+        return {"http": f"socks4://{proxy}", "https": f"socks4://{proxy}"}
+    return None
+
+# Add new helper functions for handling videos
+def ensure_directory_exists(directory_path):
+    """Make sure a directory exists, creating it if necessary."""
+    path = Path(directory_path)
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+def detect_language(text):
+    """Detect the language of the text."""
+    try:
+        return langdetect.detect(text)
+    except:
+        return "en"  # Default to English if detection fails
+
+def map_language_code(lang_code):
+    """Map language codes to language names that the system understands."""
+    language_map = {
+        "en": "English",
+        "vi": "Vietnamese",
+        "zh-tw": "Taiwanese",
+        "zh-cn": "Chinese",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "de": "German",
+        "es": "Spanish",
+        "fr": "French",
+        "id": "Indonesian",
+        "it": "Italian",
+        "ru": "Russian",
+    }
+    return language_map.get(lang_code.lower(), "English")
+
+def extract_channel_id(url):
+    """Extract channel ID from various platform URLs."""
+    # YouTube channel formats
+    youtube_patterns = [
+        r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/channel\/([a-zA-Z0-9_-]+)',
+        r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/c\/([a-zA-Z0-9_-]+)',
+        r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/user\/([a-zA-Z0-9_-]+)',
+        r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/@([a-zA-Z0-9_-]+)',
+    ]
+    
+    for pattern in youtube_patterns:
+        match = re.search(pattern, url)
+        if match:
+            return f"youtube_{match.group(1)}"
+    
+    # TikTok profile format
+    tiktok_pattern = r'(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@([a-zA-Z0-9_.-]+)'
+    match = re.search(tiktok_pattern, url)
+    if match:
+        return f"tiktok_{match.group(1)}"
+    
+    # If no pattern matches, use a hash of the URL
+    import hashlib
+    return hashlib.md5(url.encode()).hexdigest()
+
+# Improve get_channel_videos function with timeout and better error handling
+def get_channel_videos(url, max_videos=None):
+    """Get videos from a channel URL using yt_dlp instead of pytube."""
+    videos = []
+    channel_desc = ""
+    
+    try:
+        # Handle YouTube channels
+        if 'youtube.com' in url or 'youtu.be' in url:
+            # Use yt_dlp to extract playlist info with timeout
+            ydl_opts = {
+                'quiet': True,
+                'extract_flat': True,
+                'force_generic_extractor': False,
+                'ignoreerrors': True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    if '/channel/' in url or '/c/' in url or '/user/' in url or '/@' in url:
+                        # For channel URLs, extract uploads playlist
+                        url = url+"/videos"  # Append /videos to get uploads
+                        info = ydl.extract_info(url, download=False)
+                        channel_desc = info.get('description', "") or info.get('channel', "") or "YouTube Channel"
+                        
+                        # Get videos from channel's uploads
+                        video_count = 0
+                        entries = info.get('entries', [])
+                        if not entries:
+                            safe_write_log(f"Không tìm thấy video nào trong kênh: {url}")
+                            return channel_desc, videos
+                            
+                        for entry in entries:
+                            if max_videos and video_count >= max_videos:
+                                break
+                            if entry and entry.get('id'):  # Make sure entry is valid
+                                videos.append({
+                                    'url': f"https://www.youtube.com/watch?v={entry['id']}",
+                                    'id': entry['id'],
+                                    'platform': 'youtube',
+                                    'title': entry.get('title', ''),
+                                    'uploader': entry.get('uploader', '')
+                                })
+                                video_count += 1
+                    else:
+                        # For direct video URL
+                        info = ydl.extract_info(url, download=False)
+                        if info and info.get('id'):
+                            videos.append({
+                                'url': url,
+                                'id': info['id'],
+                                'platform': 'youtube',
+                                'title': info.get('title', ''),
+                                'uploader': info.get('uploader', '')
+                            })
+                            channel_desc = info.get('description', "") or "YouTube Video"
+                except Exception as inner_e:
+                    safe_write_log(f"Error extracting video info: {str(inner_e)}")
+        
+        # TikTok handling using yt-dlp
+        elif 'tiktok.com' in url:
+            safe_write_log("Đang xử lý TikTok...")
+            ydl_opts = {
+                'extract_flat': True,
+                'skip_download': True,
+                'quiet': True,
+                'socket_timeout': 30,  # Add timeout
+                'retries': 3,          # Retry a few times
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                channel_desc = info.get('description', "") or "TikTok Profile"
+                
+                # Handle TikTok user page vs single video
+                if info.get('_type') == 'playlist':
+                    video_count = 0
+                    entries = info.get('entries', [])
+                    for entry in entries:
+                        if max_videos and video_count >= max_videos:
+                            break
+                        if entry and entry.get('id'):  # Validate entry
+                            videos.append({
+                                'url': entry['url'],
+                                'id': entry['id'],
+                                'platform': 'tiktok',
+                                'title': entry.get('title', ''),
+                                'uploader': entry.get('uploader', '')
+                            })
+                            video_count += 1
+                elif info and info.get('id'):  # Validate info
+                    videos.append({
+                        'url': url,
+                        'id': info['id'],
+                        'platform': 'tiktok',
+                        'title': info.get('title', ''),
+                        'uploader': info.get('uploader', '')
+                    })
+        
+        # Return both channel description and videos
+        return channel_desc, videos
+        
+    except Exception as e:
+        safe_write_log(f"Error getting videos: {str(e)}")
+        return channel_desc, videos  # Return whatever we have, even if empty
+
+def get_video_details(video_url, platform='youtube'):
+    """Get details about a specific video using yt-dlp instead of pytube."""
+    try:
+        ydl_opts = {
+            'skip_download': True,
+            'quiet': True,
+            'ignoreerrors': True,  # Add this to ignore errors and continue
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            
+            if not info:
+                safe_write_log(f"Video unavailable: {video_url}")
+                return None
+            
+            # Extract thumbnail URL - fixing the previous error here
+            thumbnails = info.get('thumbnails', [])
+            thumbnail_url = None
+            if thumbnails:  # Check if thumbnails list is not empty
+                # Sort to get the highest quality thumbnail
+                sorted_thumbnails = sorted(thumbnails, key=lambda x: x.get('width', 0) * x.get('height', 0), reverse=True)
+                if sorted_thumbnails:  # Make sure we have at least one thumbnail
+                    thumbnail_url = sorted_thumbnails[0].get('url')
+            
+            return {
+                'title': info.get('title', ''),
+                'description': info.get('description', ''),
+                'thumbnail_url': thumbnail_url,
+                'author': info.get('uploader', ''),
+                'length': info.get('duration', 0),
+                'views': info.get('view_count', 0),
+                'id': info.get('id', '')
+            }
+    except Exception as e:
+        safe_write_log(f"Error getting video details: {str(e)}")
+    
+    return None
+
+def load_processed_videos(channel_id):
+    """Load information about already processed videos."""
+    json_path = Path(USER_DATA_PATH) / channel_id / "processed_videos.json"
+    if json_path.exists():
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_processed_video(channel_id, video_id, video_data):
+    """Save information about a processed video."""
+    # Make sure the directory exists
+    channel_dir = ensure_directory_exists(Path(USER_DATA_PATH) / channel_id)
+    json_path = channel_dir / "processed_videos.json"
+    
+    # Load existing data
+    data = load_processed_videos(channel_id)
+    
+    # Add new video data
+    data[video_id] = video_data
+    
+    # Save the updated data
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# Add a global dictionary to track upload progress for each thread
+upload_progress_dict = {}
+
+# Update process_video_source to handle empty video lists better
+def process_video_source(thread_id, row_index, email, password, source_url, category, token, proxy):
+    """Process videos from a source URL (channel, profile, etc.)."""
+    import time  # Import time module at the beginning of the function
+    
+    try:
+        # Extract channel ID from the source URL
+        channel_id = extract_channel_id(source_url)
+        safe_write_log(f"Xử lý nội dung từ: {source_url} (ID: {channel_id})")
+        
+        # Create directory for this channel
+        channel_dir = ensure_directory_exists(Path(USER_DATA_PATH) / channel_id)
+        
+        # Get videos from the channel with timeout
+        try:
+            safe_update_reup_cell(row_index, 2, "Đang lấy danh sách video...")
+            fetch_result = [None, None]  # Will store [channel_desc, videos]
+            
+            def fetch_videos():
+                try:
+                    result = get_channel_videos(source_url)  # Get all videos, not just the requested number
+                    fetch_result[0] = result[0]  # channel_desc
+                    fetch_result[1] = result[1]  # videos
+                except Exception as e:
+                    safe_write_log(f"Lỗi lấy danh sách video: {str(e)}")
+                    fetch_result[0] = ""
+                    fetch_result[1] = []
+            
+            # Start fetching in a separate thread to enable timeout
+            fetch_thread = threading.Thread(target=fetch_videos)
+            fetch_thread.daemon = True
+            fetch_thread.start()
+            
+            # Wait for fetch with timeout
+            fetch_thread.join(timeout=60)  # 60 second timeout
+            
+            if fetch_thread.is_alive():
+                safe_write_log(f"Quá thời gian lấy danh sách video cho {source_url}")
+                safe_update_reup_cell(row_index, 2, "Timeout khi lấy danh sách video")
+                return "Timeout error"
+                
+            channel_desc, videos = fetch_result
+        except Exception as fetch_e:
+            safe_write_log(f"Lỗi khi lấy danh sách video: {str(fetch_e)}")
+            safe_update_reup_cell(row_index, 2, "Lỗi khi lấy danh sách video")
+            return "Failed to fetch videos"
+        
+        if not videos:
+            safe_update_reup_cell(row_index, 2, "Không tìm thấy video")
+            safe_write_log(f"Không tìm thấy video nào từ {source_url}")
+            return "No videos found"
+            
+        safe_write_log(f"Đã tìm thấy {len(videos)} video từ nguồn")
+        
+        # Detect language from channel description
+        lang_code = detect_language(channel_desc)
+        language = map_language_code(lang_code)
+        safe_write_log(f"Phát hiện ngôn ngữ: {language}")
+        
+        # Load previously processed videos
+        processed_videos = load_processed_videos(channel_id)
+        
+        # Variables to track our progress
+        requested_video_count = int(video_count_var.get())
+        successful_uploads = 0
+        skipped_count = 0
+        failed_count = 0
+        attempted_videos = 0
+        
+        # Process videos until we reach the requested count or run out of videos
+        for video in videos:
+            # Check if we've reached the requested count of successful uploads
+            if successful_uploads >= requested_video_count:
+                break
+                
+            attempted_videos += 1
+            
+            # Skip videos that we've already processed
+            if video['id'] in processed_videos:
+                skipped_count += 1
+                safe_write_log(f"Bỏ qua video đã xử lý: {video['id']}")
+                continue
+                
+            # Get detailed information about the video
+            safe_update_reup_cell(row_index, 2, f"Đang xử lý video {attempted_videos}/{len(videos)} (Đã đăng: {successful_uploads}/{requested_video_count})")
+            
+            try:
+                video_details = get_video_details(video['url'], video['platform'])
+                
+                if not video_details:
+                    safe_write_log(f"Không thể lấy thông tin chi tiết cho video: {video['id']}")
+                    failed_count += 1
+                    
+                    # Mark this video as processed so we don't try it again
+                    save_processed_video(channel_id, video['id'], {
+                        'processed_at': time.time(),
+                        'title': video.get('title', 'Unknown'),
+                        'success': False,
+                        'error': "Failed to get video details"
+                    })
+                    continue
+                    
+                # Create a folder for this video
+                video_dir = ensure_directory_exists(channel_dir / video['id'])
+                
+                # Download the video to the video-specific directory
+                safe_write_log(f"Đang tải video: {video_details['title']}")
+                safe_update_reup_cell(row_index, 2, f"Đang tải video {attempted_videos}...")
+                
+                # Pass the video_dir to download_video so it can save there
+                video_path = download_video(video['url'], email, password, str(video_dir))
+                
+                if not video_path:
+                    safe_write_log(f"Không thể tải video: {video['id']}")
+                    failed_count += 1
+                    
+                    # Mark this video as processed so we don't try it again
+                    save_processed_video(channel_id, video['id'], {
+                        'processed_at': time.time(),
+                        'title': video_details['title'],
+                        'success': False,
+                        'error': "Failed to download video"
+                    })
+                    continue
+                    
+                # Download the thumbnail
+                thumbnail_path = str(video_dir / "thumbnail.jpg")
+                try:
+                    with open(thumbnail_path, 'wb') as f:
+                        f.write(requests.get(video_details['thumbnail_url']).content)
+                except Exception as e:
+                    safe_write_log(f"Không thể tải thumbnail: {str(e)}")
+                    thumbnail_path = None
+                
+                # Save video metadata
+                with open(video_dir / "info.json", 'w', encoding='utf-8') as f:
+                    json.dump(video_details, f, ensure_ascii=False, indent=2)
+                    
+                # Upload the video
+                safe_write_log(f"Đang đăng tải video: {video_details['title']}")
+                safe_update_reup_cell(row_index, 2, f"Đang đăng tải {attempted_videos}...")
+                
+                # Create a progress tracker for this upload
+                upload_id = f"{thread_id}_{video['id']}"
+                upload_progress_dict[upload_id] = 0
+                
+                # Start a background thread to update the progress
+                progress_thread = threading.Thread(
+                    target=update_upload_progress,
+                    args=(row_index, upload_id),
+                    daemon=True
+                )
+                progress_thread.start()
+                
+                # Use the upload function from Function.py
+                upload_success = upload_video(
+                    token=token,
+                    title=video_details['title'],
+                    description=video_details['description'],
+                    video_path=video_path,
+                    url_poster=thumbnail_path,
+                    lang=language,
+                    cat=category,
+                    email=email,
+                    password=password,
+                    global_proxy=proxy,
+                    total=successful_uploads,
+                    upload_id=upload_id
+                )
+                
+                # Clean up the progress tracking
+                if upload_id in upload_progress_dict:
+                    upload_progress_dict[upload_id] = 100
+                    time.sleep(0.5)
+                    del upload_progress_dict[upload_id]
+                
+                # Process upload result
+                if isinstance(upload_success, tuple) or upload_success is True:
+                    successful_uploads += 1
+                    safe_write_log(f"Đăng tải thành công: {video_details['title']} ({successful_uploads}/{requested_video_count})")
+                    
+                    # Mark this video as processed
+                    save_processed_video(channel_id, video['id'], {
+                        'processed_at': time.time(),
+                        'title': video_details['title'],
+                        'success': True
+                    })
+                else:
+                    failed_count += 1
+                    safe_write_log(f"Đăng tải thất bại: {video_details['title']}")
+                    
+                    # Mark this video as processed
+                    save_processed_video(channel_id, video['id'], {
+                        'processed_at': time.time(),
+                        'title': video_details['title'],
+                        'success': False,
+                        'error': "Upload failed"
+                    })
+                
+                # Add delay between videos to prevent rate limiting
+                if successful_uploads < requested_video_count and videos.index(video) < len(videos) - 1:
+                    delay_seconds = int(delay_var.get())
+                    if delay_seconds > 0:
+                        safe_write_log(f"Delay {delay_seconds}s trước video tiếp theo...")
+                        safe_update_reup_cell(row_index, 2, f"Đang chờ {delay_seconds}s...")
+                        time.sleep(delay_seconds)
+            
+            except Exception as video_e:
+                safe_write_log(f"Lỗi xử lý video {video['id']}: {str(video_e)}")
+                failed_count += 1
+                
+                # Mark this video as processed
+                save_processed_video(channel_id, video['id'], {
+                    'processed_at': time.time(),
+                    'title': video.get('title', 'Unknown'),
+                    'success': False,
+                    'error': str(video_e)
+                })
+        
+        # Update the UI with the final results
+        if successful_uploads == 0:
+            summary = "Không thể đăng video nào"
+            if attempted_videos == 0:
+                summary += " (kênh không có video mới)"
+            elif skipped_count > 0:
+                summary += f" (đã bỏ qua {skipped_count} video đã xử lý)"
+        else:
+            summary = f"Đã đăng {successful_uploads}/{requested_video_count} video"
+            if skipped_count > 0:
+                summary += f", bỏ qua {skipped_count}"
+            if failed_count > 0:
+                summary += f", thất bại {failed_count}"
+        
+        safe_update_reup_cell(row_index, 2, summary)
+        return summary
+        
+    except Exception as e:
+        safe_update_reup_cell(row_index, 2, f"Lỗi xử lý video: {str(e)}")
+        safe_write_log(f"Lỗi xử lý nguồn video: {str(e)}")
+        return None
+
+# Add a function to update the upload and encoding progress in the UI
+def update_upload_progress(row_index, upload_id):
+    """Updates the UI with upload progress and encoding progress."""
+    last_upload_progress = -1
+    last_encoding_progress = -1
+    encoding_started = False
+    
+    try:
+        # Monitor upload progress first
+        while upload_id in upload_progress_dict:
+            # Get the current upload progress
+            progress = get_upload_progress(upload_id)
+            
+            # Only update if progress has changed
+            if progress != last_upload_progress:
+                if progress < 100:
+                    safe_update_reup_cell(row_index, 2, f"Đang đăng tải... {progress}%")
+                else:
+                    safe_update_reup_cell(row_index, 2, "Xử lý video sau khi đăng tải...")
+                    encoding_started = True
+                last_upload_progress = progress
+            
+            # If upload is complete, start checking encoding progress
+            if encoding_started:
+                encoding_progress = get_encoding_progress(upload_id)
+                if encoding_progress != last_encoding_progress:
+                    safe_update_reup_cell(row_index, 2, f"Đang mã hóa video... {encoding_progress}%")
+                    last_encoding_progress = encoding_progress
+                    
+                    if encoding_progress >= 100:
+                        safe_update_reup_cell(row_index, 2, "Hoàn thành mã hóa video!")
+            
+            # Use shorter sleep times for more responsive updates
+            time.sleep(0.5)
+            
+    except Exception as e:
+        # Don't crash if there's an error updating progress
+        safe_write_log(f"Lỗi cập nhật tiến độ: {str(e)}")
+        return
+
+# Add a function to monitor video encoding progress
+def monitor_encoding_progress(row_index, token, content_id, video_id):
+    """Monitor the encoding progress of an uploaded video."""
+    try:
+        encoding_complete = False
+        last_progress = -1
+        update_token = None
+        
+        # Try to get a new token for video status API if needed
+        try:
+            h = {'Authorization': token}
+            update_token_response = requests.get(
+                f"https://gw.ganjingworld.com/v1.1/get-vod-token?content_id={content_id}", 
+                headers=h
+            ).json()
+            update_token = update_token_response["data"]["token"]
+        except Exception as e:
+            safe_write_log(f"Error getting update token: {str(e)}")
+            # Continue with the original token if we can't get a new one
+            update_token = token
+        
+        while not encoding_complete:
+            try:
+                response = requests.get(
+                    f"https://vodapi.cloudokyo.cloud/api/v1/status/{video_id}", 
+                    headers={'Authorization': f"Bearer {update_token}"},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if "body" in data:
+                        if "url" in data["body"]:
+                            # Encoding is complete
+                            safe_update_reup_cell(row_index, 2, "Mã hóa video hoàn tất!")
+                            encoding_complete = True
+                            break
+                        elif "progress" in data["body"]:
+                            progress = int(data["body"]["progress"])
+                            if progress != last_progress:
+                                safe_update_reup_cell(row_index, 2, f"Đang mã hóa video... {progress}%")
+                                last_progress = progress
+                    else:
+                        safe_write_log(f"Invalid encoding status response: {data}")
+                else:
+                    safe_write_log(f"Error getting encoding status: {response.status_code}")
+                    if response.status_code == 401:  # Token expired
+                        break
+            except Exception as e:
+                safe_write_log(f"Error monitoring encoding: {str(e)}")
+            
+            # Check again after a delay
+            time.sleep(3)
+            
+            # Add a timeout - don't monitor for more than 10 minutes
+    except Exception as e:
+        safe_write_log(f"Error in encoding monitor thread: {str(e)}")
+
+# Update the process_account function to reuse rows and save tokens
+def process_account(thread_id):
+    global running, processed_count, total_accounts
+    
+    # Use thread_id as row index (1-based to account for header)
+    row_index = thread_id
+    
+    # Initialize the row with thread information for better visualization
+    safe_update_reup_cell(row_index, 0, f"Thread {thread_id}")
+    safe_update_reup_cell(row_index, 1, "Waiting")
+    safe_update_reup_cell(row_index, 2, "Ready")
+    
+    while running:
+        try:
+            # Try to get the next account from the queue with a timeout
+            # This allows threads to periodically check if they should exit
+            try:
+                index, account = account_queue.get(timeout=1)
+                email = account[0]
+                password = account[1]
+                source_video = account[2]  # This would be the channel URL
+                category = account[3]
+            except queue.Empty:
+                # No more accounts to process, but keep thread alive in case more are added
+                continue
+                
+            # Update existing row with new account info
+            safe_write_log(f"Luồng {thread_id}: Lấy tài khoản {email} để xử lý")
+            safe_update_reup_cell(row_index, 0, email)
+            safe_update_reup_cell(row_index, 1, "Chờ xử lý")
+            safe_update_reup_cell(row_index, 2, "Đang đăng nhập...")
+            
+            try:
+                # Get a random proxy if needed
+                proxy = None
+                proxy_display = "No proxy"
+                if proxy_type_var.get() != "None" and proxies_list:
+                    proxy = get_random_proxy()
+                    if proxy:
+                        proxy_display = proxy["http"].split("://")[1] 
+                        safe_update_reup_cell(row_index, 1, proxy_display)
+                
+                # Perform login
+                token, error = login(email, password, proxy)
+                
+                if token:
+                    safe_update_reup_cell(row_index, 2, "Đăng nhập thành công")
+                    safe_write_log(f"Luồng {thread_id}: {email} đăng nhập thành công")
+                    
+                    # Save successful login to file
+                    save_account_to_file(email, password, token)
+                    
+                    # Process videos from the source
+                    safe_update_reup_cell(row_index, 2, "Đang xử lý nội dung từ kênh...")
+                    process_result = process_video_source(thread_id, row_index, email, password, source_video, category, token, proxy)
+                    
+                    if process_result:
+                        safe_update_reup_cell(row_index, 2, f"Hoàn thành xử lý: {process_result}")
+                    else:
+                        safe_update_reup_cell(row_index, 2, "Không có video nào được xử lý")
+                else:
+                    safe_update_reup_cell(row_index, 2, f"Lỗi: {error}")
+                    safe_write_log(f"Luồng {thread_id}: {email} đăng nhập thất bại - {error}")
+            except Exception as e:
+                safe_update_reup_cell(row_index, 2, f"Lỗi: {str(e)}")
+                safe_write_log(f"Luồng {thread_id}: {email} gặp lỗi - {str(e)}")
+            finally:
+                # Mark this task as done
+                account_queue.task_done()
+                processed_count += 1
+                safe_write_log(f"Đã xử lý {processed_count}/{total_accounts} tài khoản")
+                
+                # Add a small delay between accounts to prevent API rate limits
+                time.sleep(1)
+                
+                # Reset the status to show thread is ready for next account
+                if running:
+                    safe_update_reup_cell(row_index, 2, "Đợi tài khoản tiếp theo...")
+        except Exception as e:
+            safe_write_log(f"Luồng {thread_id} gặp lỗi: {str(e)}")
+            # Don't exit the thread, keep it running for future accounts
+            time.sleep(2)  # Wait a bit before retrying
+
+# Function to save successful logins to a file
+def save_account_to_file(email, password, token):
+    pass
+
+# Update the start_reup function to improve thread coordination and feedback
+def start_reup():
+    global running, all_account_data, account_queue, processed_count, total_accounts
+    
+    # Clear the queue
+    while not account_queue.empty():
+        try:
+            account_queue.get_nowait()
+            account_queue.task_done()
+        except:
+            pass
+    
+    # Reset counters
+    processed_count = 0
+    
+    # Check proxy settings
+    proxy_type = proxy_type_var.get()
+    if (proxy_type != "None"):
+        write_log(f"Đã chọn loại proxy: {proxy_type}")
+        
+        # Check if proxy is loaded
+        if not proxy_loaded or len(proxies_list) == 0:
+            write_log("Chưa load file proxy hoặc danh sách proxy trống. Vui lòng load file proxy trước khi bắt đầu.")
+            return
+    else:
+        write_log("Không sử dụng proxy.")
+    
+    # Get thread count
+    try:
+        num_threads = int(threads_var.get())
+        if num_threads < 1:
+            write_log("Số luồng phải lớn hơn 0")
+            return
+    except ValueError:
+        write_log("Số luồng không hợp lệ")
+        return
+    
+    # Check for accounts
+    if len(all_account_data) <= 1:  # Only header
+        write_log("Không có tài khoản nào để xử lý")
+        return
+    
+    # Stop if already running
+    if running:
+        write_log("Đang chạy, vui lòng dừng trước khi bắt đầu lại")
+        return
+    
+    # Start processing
+    running = True
+    
+    # Reset the table with only header
+    reup_table.configure(values=[["User", "Proxy", "Status"]])
+    
+    # Get number of threads
+    num_threads = min(num_threads, len(all_account_data)-1)  # Don't make more threads than accounts
+    
+    # Create initial empty rows for each thread
+    for i in range(num_threads):
+        add_reup_row(f"Thread {i+1}", "Waiting", "Ready")
+    
+    # Add accounts to queue with randomized delay between threads
+    accounts = all_account_data[1:]  # Skip header
+    total_accounts = len(accounts)
+    for i, account in enumerate(accounts):
+        account_queue.put((i+1, account))
+    
+    write_log(f"Bắt đầu xử lý {total_accounts} tài khoản với {num_threads} luồng")
+    
+    # Start worker threads
+    threads = []
+    for i in range(num_threads):
+        # Add a small staggered delay for thread starting to prevent all threads doing network requests at the same time
+        thread = threading.Thread(
+            target=lambda idx=i: (time.sleep(idx*0.5), process_account(idx+1)),
+            daemon=True
+        )
+        threads.append(thread)
+        thread.start()
+    
+    write_log("Tất cả các luồng đã được khởi chạy")
+
 ctk.set_appearance_mode("Light")  # Chế độ giao diện (Light/Dark/System)
 ctk.set_default_color_theme("assets/red.json")  # Chủ đề màu sắc
 
@@ -6,10 +805,8 @@ ctk.set_default_color_theme("assets/red.json")  # Chủ đề màu sắc
 app = ctk.CTk()  # Tạo cửa sổ chính
 app.title("GanSync Reup Video")
 app.geometry("1000x700")  # Kích thước cửa sổ
-# ...existing code...
 ICON_PATH = "assets/icon.ico"
 app.iconbitmap(ICON_PATH)
-# ...existing code...
 
 
 # Tạo một widget Notebook (TabView)
@@ -53,13 +850,38 @@ logo_label.pack(pady=10)
 
 
 # Nút Import Data
+def add_row_to_table(user, password, source_video, category):
+    """Thêm một hàng vào bảng hiển thị tài khoản."""
+    account_table.add_row( [user, password, source_video, category], len(account_table.values))  # Append row at the end
+
+def update_cell_in_table(row, column, value):
+    """Cập nhật một ô cụ thể trong bảng hiển thị tài khoản."""
+    account_table.insert(row, column, value)
+
 def import_data():
-    file_path = filedialog.askopenfilename(filetypes=[("TXT Files", "*.txt"),("Excel Files", "*.xlsx"), ("All Files", "*.*")])
+    file_path = filedialog.askopenfilename(filetypes=[("TXT Files", "*.txt"), ("Excel Files", "*.xlsx"), ("All Files", "*.*")])
     if file_path:
-        print(f"Imported data from {file_path}")
+        if file_path.endswith(".txt"):
+            with open(file_path, "r", encoding="utf-8") as file:
+                for line in file:
+                    values = line.strip().split("|")
+                    if len(values) >= 4:
+                        add_row_to_table(values[0], values[1], values[2], values[3])  # Lấy 4 giá trị đầu tiên
+        elif file_path.endswith(".xlsx"):
+            workbook = openpyxl.load_workbook(file_path)
+            sheet = workbook.active
+            for row in sheet.iter_rows(min_row=2, max_col=4, values_only=True):  # Bỏ qua tiêu đề, lấy 4 cột đầu
+                if all(row):  # Kiểm tra nếu tất cả giá trị trong hàng không rỗng
+                    add_row_to_table(row[0], row[1], row[2], row[3])
+        write_log(f"Imported data from {file_path}")
+    else:
+        write_log("Không có file nào được chọn.")
 
 btn_import = ctk.CTkButton(frame_left, text="Import Data", command=import_data)
 btn_import.pack(pady=5)
+
+# Biến toàn cục để lưu trữ tất cả dữ liệu tài khoản
+all_account_data = [["User", "Password", "Source Video", "Category"]]
 
 # 2/3 bên phải
 frame_right = ctk.CTkFrame(frame_main)
@@ -77,15 +899,32 @@ def normalize_text(text):
     ).lower()
 
 def search_table():
-    search_text = normalize_text(search_var.get().strip())  # Chuẩn hóa chuỗi tìm kiếm
-    for i, row in enumerate(scrollable_frame.winfo_children()):
-        if i == 0:  # Bỏ qua tiêu đề
-            continue
-        col1_text = normalize_text(row.winfo_children()[0].cget("text"))  # Chuẩn hóa văn bản cột 1
-        if search_text in col1_text:  # Kiểm tra chuỗi con
-            row.grid()  # Hiển thị dòng nếu khớp
-        else:
-            row.grid_remove()  # Ẩn dòng nếu không khớp
+    global all_account_data
+    search_text = normalize_text(search_var.get().strip())
+    
+    try:
+        if not search_text:  # Nếu không có text tìm kiếm, hiển thị tất cả
+            account_table.configure(values=all_account_data)
+            write_log("Hiển thị tất cả tài khoản")
+            return
+            
+        # Lọc các hàng có chứa text tìm kiếm trong cột user
+        header = all_account_data[0]  # Lưu lại header row
+        filtered_values = [header]  # Luôn giữ header row
+        for row in all_account_data[1:]:  # Bỏ qua header row
+            if search_text in normalize_text(row[0]):
+                filtered_values.append(row)
+        
+        # Cập nhật bảng với dữ liệu đã lọc
+        account_table.configure(values=filtered_values)
+        
+        # Log kết quả
+        result_count = len(filtered_values) - 1  # Trừ đi header row
+        write_log(f"Tìm thấy {result_count} tài khoản phù hợp")
+    
+    except Exception as e:
+        write_log(f"Lỗi khi tìm kiếm: {e}")
+        print(f"Search error: {e}")
 
 search_frame = ctk.CTkFrame(frame_right)
 search_frame.pack(fill="x", pady=5)
@@ -96,37 +935,47 @@ search_entry.pack(side="left", fill="x", expand=True, padx=5)
 btn_search = ctk.CTkButton(search_frame, text="Search", command=search_table)
 btn_search.pack(side="right", padx=5)
 
+# Đăng ký sự kiện cho ô tìm kiếm để tự động tìm kiếm khi xóa text
+def on_search_clear(event=None):
+    if not search_var.get():
+        account_table.configure(values=all_account_data)
+
+# Liên kết sự kiện với ô tìm kiếm
+search_entry.bind("<KeyRelease>", lambda e: on_search_clear() if not search_var.get() else None)
+
 # Bảng hiển thị tài khoản
-scrollable_frame = ctk.CTkScrollableFrame(frame_right, width=750, height=500)
-scrollable_frame.pack(fill="both", expand=True, pady=10)
+scrollable_frame_account = ctk.CTkScrollableFrame(frame_right, height=300)  # Height for 10 rows
+scrollable_frame_account.pack(fill="both", expand=True, pady=10)
 
-# Tạo các tiêu đề cột
-header_frame = ctk.CTkFrame(scrollable_frame)
-header_frame.grid(row=0, column=0, sticky="nsew")
+account_table = CTkTable(
+    scrollable_frame_account,
+    values=[["User", "Password", "Source Video", "Category"]]  # Initialize with header row as values
+)
+account_table.pack(fill="both", expand=True)
 
-header_col1 = ctk.CTkLabel(header_frame, text="User", width=375, anchor="w", font=("Arial", 14, "bold"))
-header_col1.grid(row=0, column=0, padx=5, pady=5)
+# Hàm để cập nhật dữ liệu tài khoản vào biến toàn cục
+def update_all_account_data():
+    global all_account_data
+    try:
+        # Lấy dữ liệu mới nhất từ bảng
+        current_data = account_table.values
+        all_account_data = current_data
+    except Exception as e:
+        print(f"Error updating account data: {e}")
 
-header_col2 = ctk.CTkLabel(header_frame, text="Password", width=375, anchor="w", font=("Arial", 14, "bold"))
-header_col2.grid(row=0, column=1, padx=5, pady=5)
+# Ghi đè hàm import_data để cập nhật biến toàn cục
+original_add_row = add_row_to_table
 
-# Thêm dữ liệu mẫu vào bảng
-# Thêm dữ liệu mẫu vào bảng
-for i in range(30):
-    user = f"User{i+1}"
-    password = f"Password{i+1}"
-    
-    # Tạo một hàng mới
-    row_frame = ctk.CTkFrame(scrollable_frame)
-    row_frame.grid(row=i+1, column=0, sticky="nsew", padx=5, pady=2)
+# Hàm wrapper cho add_row_to_table
+def add_row_wrapper(user, password, source_video, category):
+    global all_account_data
+    # Gọi hàm add_row_to_table gốc
+    original_add_row(user, password, source_video, category)
+    # Cập nhật biến toàn cục
+    all_account_data.append([user, password, source_video, category])
 
-    # Cột User
-    user_label = ctk.CTkLabel(row_frame, text=user, width=375, anchor="w", font=("Arial", 12))
-    user_label.grid(row=0, column=0, padx=5, pady=2)
-
-    # Cột Password
-    password_label = ctk.CTkLabel(row_frame, text=password, width=375, anchor="w", font=("Arial", 12))
-    password_label.grid(row=0, column=1, padx=5, pady=2)
+# Thay thế hàm add_row_to_table trong các hàm khác
+import_data.__globals__['add_row_to_table'] = add_row_wrapper
 
 # Tab "Reup Video"
 # Nội dung cho tab "Reup Video"
@@ -163,12 +1012,22 @@ proxy_dropdown.pack(pady=5)
 
 # Nút Load File Proxy
 def load_proxy_file():
+    global proxies_list, proxy_loaded
     if proxy_type_var.get() == "None":
         write_log("Không thể load proxy vì loại proxy đang là 'None'.")
         return
+        
     file_path = filedialog.askopenfilename(filetypes=[("TXT Files", "*.txt"), ("All Files", "*.*")])
     if file_path:
-        write_log(f"Đã load file proxy: {file_path}")
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                proxies_list = [line.strip() for line in f if line.strip()]
+                
+            proxy_loaded = True
+            write_log(f"Đã load {len(proxies_list)} proxy từ file: {file_path}")
+            start_reup.proxy_loaded = True  # Đánh dấu là đã load proxy
+        except Exception as e:
+            write_log(f"Lỗi khi đọc file proxy: {e}")
     else:
         write_log("Không có file proxy nào được chọn.")
 
@@ -177,50 +1036,146 @@ btn_load_proxy.pack(pady=5)
 
 # Cập nhật logic nút Start
 def start_reup():
+    global running, all_account_data, account_queue, processed_count, total_accounts
+    
+    # Clear the queue
+    while not account_queue.empty():
+        try:
+            account_queue.get_nowait()
+            account_queue.task_done()
+        except:
+            pass
+    
+    # Reset counters
+    processed_count = 0
+    
+    # Check proxy settings
     proxy_type = proxy_type_var.get()
-    if proxy_type != "None":
+    if (proxy_type != "None"):
         write_log(f"Đã chọn loại proxy: {proxy_type}")
+        
+        # Check if proxy is loaded
+        if not proxy_loaded or len(proxies_list) == 0:
+            write_log("Chưa load file proxy hoặc danh sách proxy trống. Vui lòng load file proxy trước khi bắt đầu.")
+            return
     else:
         write_log("Không sử dụng proxy.")
-
-    # Kiểm tra nếu proxy không được load
-    if proxy_type != "None" and not hasattr(start_reup, "proxy_loaded"):
-        write_log("Chưa load file proxy. Vui lòng load file proxy trước khi bắt đầu.")
+    
+    # Get thread count
+    try:
+        num_threads = int(threads_var.get())
+        if num_threads < 1:
+            write_log("Số luồng phải lớn hơn 0")
+            return
+    except ValueError:
+        write_log("Số luồng không hợp lệ")
         return
-
-    write_log("Reup started.")
+    
+    # Check for accounts
+    if len(all_account_data) <= 1:  # Only header
+        write_log("Không có tài khoản nào để xử lý")
+        return
+    
+    # Stop if already running
+    if running:
+        write_log("Đang chạy, vui lòng dừng trước khi bắt đầu lại")
+        return
+    
+    # Start processing
+    running = True
+    
+    # Reset the table with only header
+    reup_table.configure(values=[["User", "Proxy", "Status"]])
+    
+    # Get number of threads
+    num_threads = min(num_threads, len(all_account_data)-1)  # Don't make more threads than accounts
+    
+    # Create initial empty rows for each thread
+    for i in range(num_threads):
+        add_reup_row(f"Thread {i+1}", "Waiting", "Ready")
+    
+    # Add accounts to queue with randomized delay between threads
+    accounts = all_account_data[1:]  # Skip header
+    total_accounts = len(accounts)
+    for i, account in enumerate(accounts):
+        account_queue.put((i+1, account))
+    
+    write_log(f"Bắt đầu xử lý {total_accounts} tài khoản với {num_threads} luồng")
+    
+    # Start worker threads
+    threads = []
+    for i in range(num_threads):
+        # Add a small staggered delay for thread starting to prevent all threads doing network requests at the same time
+        thread = threading.Thread(
+            target=lambda idx=i: (time.sleep(idx*0.5), process_account(idx+1)),
+            daemon=True
+        )
+        threads.append(thread)
+        thread.start()
+    
+    write_log("Tất cả các luồng đã được khởi chạy")
 
 btn_start.configure(command=start_reup)
 
 # Cập nhật logic nút Stop
 def stop_reup():
-    write_log("Reup stopped.")
+    global running
+    running = False
+    write_log("Đang dừng tất cả các luồng...")
 
 btn_stop.configure(command=stop_reup)
+
+# Thêm trường "Luồng"
+label_threads = ctk.CTkLabel(frame_reup_left, text="Luồng:", font=("Arial", 12))
+label_threads.pack(anchor="w", padx=10, pady=2)
+
+threads_var = tk.IntVar(value=1)  # Giá trị mặc định là 1
+threads_entry = ctk.CTkEntry(frame_reup_left, textvariable=threads_var, width=140)
+threads_entry.pack(padx=10, pady=2)
+
+# Thêm trường "Delay"
+label_delay = ctk.CTkLabel(frame_reup_left, text="Delay (giây):", font=("Arial", 12))
+label_delay.pack(anchor="w", padx=10, pady=2)
+
+delay_var = tk.IntVar(value=5)  # Giá trị mặc định là 5
+delay_entry = ctk.CTkEntry(frame_reup_left, textvariable=delay_var, width=140)
+delay_entry.pack(padx=10, pady=2)
+
+# Thêm trường "Số video"
+label_video_count = ctk.CTkLabel(frame_reup_left, text="Số video:", font=("Arial", 12))
+label_video_count.pack(anchor="w", padx=10, pady=2)
+
+video_count_var = tk.IntVar(value=1)  # Giá trị mặc định là 1
+video_count_entry = ctk.CTkEntry(frame_reup_left, textvariable=video_count_var, width=140)
+video_count_entry.pack(padx=10, pady=2)
 
 # 2/3 bên phải
 frame_reup_right = ctk.CTkFrame(frame_reup_main)
 frame_reup_right.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
-# 2/3 bên trên: Bảng Source Video
+# 2/3 bên trên: Bảng User, Proxy, Status - Simplified to match account table style
 frame_table = ctk.CTkFrame(frame_reup_right, height=400)
 frame_table.pack(fill="both", expand=True, padx=10, pady=5)
 
-# Tiêu đề cột
-header_frame_reup = ctk.CTkFrame(frame_table)
-header_frame_reup.grid(row=0, column=0, sticky="nsew")
+# Create scrollable frame for table
+scrollable_frame_reup = ctk.CTkScrollableFrame(frame_table, height=300)
+scrollable_frame_reup.pack(fill="both", expand=True, pady=10)
 
-header_col_source = ctk.CTkLabel(header_frame_reup, text="Source Video", anchor="w", font=("Arial", 14, "bold"))
-header_col_source.grid(row=0, column=0, padx=5, pady=5)
+# Create the table with headers
+reup_table = CTkTable(
+    scrollable_frame_reup,
+    values=[["User", "Proxy", "Status"]]  # Initialize with header row as values
+)
+reup_table.pack(fill="both", expand=True)
 
 # Thêm dữ liệu mẫu vào bảng
-scrollable_frame_reup = ctk.CTkScrollableFrame(frame_table, width=750, height=420)
-scrollable_frame_reup.grid(row=1, column=0, sticky="nsew")
+def add_reup_row(user, proxy, status):
+    """Thêm một hàng vào bảng Reup Video."""
+    reup_table.add_row([user, proxy, status], len(reup_table.values))  # Append row at the end
 
-sample_videos = [f"Video {i+1}" for i in range(30)]  # Danh sách video mẫu
-for i, video in enumerate(sample_videos):
-    video_label = ctk.CTkLabel(scrollable_frame_reup, text=video, anchor="w", font=("Arial", 20))
-    video_label.grid(row=i, column=0, padx=5, pady=2, sticky="w")
+def update_reup_cell(row, column, value):
+    """Cập nhật một ô cụ thể trong bảng Reup Video."""
+    reup_table.insert(row, column, value)
 
 # 1/3 bên dưới: Ô log
 frame_log = ctk.CTkFrame(frame_reup_right, height=200)
@@ -499,7 +1454,21 @@ video_ratio_dropdown = ctk.CTkOptionMenu(
 )
 video_ratio_dropdown.pack(padx=10, pady=2)
 
+# Chất lượng video
+label_video_quality = ctk.CTkLabel(frame_settings_right, text="Chất lượng Video (chất lượng có thể thấp hơn nếu không khả dụng):")
+label_video_quality.pack(anchor="w", padx=10, pady=2)
+
+video_quality_var = tk.StringVar(value="1080p")
+video_quality_dropdown = ctk.CTkOptionMenu(
+    frame_settings_right,
+    values=["4K (2160p)", "2K (1440p)", "Full HD (1080p)", "HD (720p)", "SD (480p)", "360p", "240p"],
+    variable=video_quality_var,
+    width=150
+)
+video_quality_dropdown.pack(padx=10, pady=2)
+
 # Watermark
+
 label_watermark = ctk.CTkLabel(frame_settings_right, text="Watermark:")
 label_watermark.pack(anchor="w", padx=10, pady=2)
 
@@ -524,4 +1493,5 @@ label_information.pack(pady=20)
 # Chạy ứng dụng
 load_logo_from_path(DEFAULT_LOGO_PATH)
 write_log("Chương trình đã khởi động.")
+app.after(100, process_ui_updates)
 app.mainloop()
